@@ -1,12 +1,5 @@
 """
-Plotting functions.
-
-NOTE for future refactoring: these functions currently both compute (build
-Hamiltonians, diagonalize) and plot/save. A natural next step, once you're
-comfortable with the rest of the structure, is to split each of these into
-a `compute_...` function that returns plain arrays and a `plot_...` function
-that only draws — that makes the numbers reusable and testable without
-matplotlib/plotly involved at all.
+Plotting routines for Floquet bands, Dirac cuts, and topological invariant sweeps.
 """
 
 import os
@@ -17,20 +10,35 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 
 from .constants import AMPLITUDE, HOPPING, POLARIZATION, LATTICE_CONSTANT, MIN_RESOLVABLE_GAP
-from .lattice import get_lattice_vectors, dirac_cut_grid
+from .lattice import get_lattice_vectors, build_bz_grid, dirac_cut_grid
 from .hamiltonians import build_floquet_hamiltonian
 from .gaps import compute_band_gaps_spectrum
 from .topology import compute_floquet_chern_adaptive, compute_winding_number_for_band
 
 
 def compute_and_save_interactive_plotly(
-    N, omega, output_folder, c_lower, c_upper, A_0=AMPLITUDE, t=HOPPING, a=LATTICE_CONSTANT, grid_size=60, save_html=False
+    N,
+    omega,
+    output_folder,
+    c_lower,
+    c_upper,
+    A_0=AMPLITUDE,
+    t=HOPPING,
+    pol=POLARIZATION,
+    a=LATTICE_CONSTANT,
+    max_order=1,
+    grid_size=60,
+    save_html=False,
+    hamiltonian_builder = build_floquet_hamiltonian
 ):
-    kx_vals = np.linspace(-np.pi / a, np.pi / a, grid_size)
-    ky_vals = np.linspace(-np.pi / a, np.pi / a, grid_size)
-    KX, KY = np.meshgrid(kx_vals, ky_vals)
+    """
+    Generates and saves a 3D interactive Plotly surface of the central Floquet bands.
+    """
+    KX, KY = build_bz_grid(grid_size, a=a)
 
-    H_F_all = build_floquet_hamiltonian(KX, KY, N=N, omega=omega, A_0=A_0, t=t, a=a)
+    H_F_all = hamiltonian_builder(
+        KX, KY, N=N, omega=omega, A_0=A_0, t=t, pol=pol, a=a, max_order=max_order
+    )
     bands = np.linalg.eigvalsh(H_F_all)
 
     fig = go.Figure()
@@ -52,29 +60,53 @@ def compute_and_save_interactive_plotly(
         showscale=False, colorscale='Reds', opacity=0.85
     ))
 
-    title_text = f'Floquet Bands (N={N}, A0={A_0}, w={omega}, t={t})<br><b>C_val = {c_lower_str}, C_cond = {c_upper_str}</b>'
-    fig.update_layout(title=title_text, scene=dict(xaxis_title='kx', yaxis_title='ky', zaxis_title='Quasienergy'), width=950, height=750)
+    title_text = (
+        f'Floquet Bands (N={N}, A0={A_0}, w={omega}, t={t}, pol={pol:+d})<br>'
+        f'<b>C_val = {c_lower_str}, C_cond = {c_upper_str}</b>'
+    )
+    fig.update_layout(
+        title=title_text,
+        scene=dict(xaxis_title='kx', yaxis_title='ky', zaxis_title='Quasienergy'),
+        width=950,
+        height=750,
+    )
 
-    img_name = f"floquet_3D_N={N}_A0={A_0}_w={omega}_C_upper={c_upper_str}.png"
+    img_name = f"floquet_3D_N={N}_A0={A_0}_w={omega}_pol={pol}_C_upper={c_upper_str}.png"
     img_path = os.path.join(output_folder, img_name)
     fig.write_image(img_path, scale=3)
     print(f"    Saved static 3D image: {img_path}")
 
     if save_html:
-        file_name = f"floquet_3D_N={N}_A0={A_0}_w={omega}_C_upper={c_upper_str}.html"
+        file_name = f"floquet_3D_N={N}_A0={A_0}_w={omega}_pol={pol}_C_upper={c_upper_str}.html"
         file_path = os.path.join(output_folder, file_name)
         fig.write_html(file_path)
         print(f"    Saved interactive HTML: {file_path}")
 
 
 def compute_and_save_2d_dirac_cut(
-    N, omega, output_folder, c_lower, c_upper, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT, num_pts=500
+    N,
+    omega,
+    output_folder,
+    c_lower,
+    c_upper,
+    A_0=AMPLITUDE,
+    t=HOPPING,
+    pol=POLARIZATION,
+    a=LATTICE_CONSTANT,
+    max_order=1,
+    num_pts=500,
+    hamiltonian_builder = build_floquet_hamiltonian
 ):
+    """
+    Plots the 2D quasienergy slice across the K - K' Dirac cut against the static spectrum.
+    """
     a1, a2, _, _ = get_lattice_vectors(a=a)
     KX, KY, ky_min, ky_max = dirac_cut_grid(a=a, num_pts=num_pts)
     ky_vals = KY[:, 0]
 
-    H_F = build_floquet_hamiltonian(KX, KY, N=N, omega=omega, A_0=A_0, t=t, pol=pol, a=a)
+    H_F = hamiltonian_builder(
+        KX, KY, N=N, omega=omega, A_0=A_0, t=t, pol=pol, a=a, max_order=max_order
+    )
     evals = np.linalg.eigvalsh(H_F)[:, 0, :]
 
     band_lower = 2 * N
@@ -104,7 +136,7 @@ def compute_and_save_2d_dirac_cut(
 
     plt.title(
         f"2D Cut Through Dirac Points ($k_x = 2\\pi/3$)\n"
-        f"Floquet Replica Order: N = {N}  |  $A_0={A_0},\\ \\omega={omega},\\ t={t},\\ \\sigma={pol}$\n"
+        f"Floquet Replica Order: N = {N}  |  $A_0={A_0},\\ \\omega={omega},\\ t={t},\\ \\sigma={pol:+d}$\n"
         f"Chern Numbers: $C_{{val}}={c_lower_str},\\ C_{{cond}}={c_upper_str}$",
         fontsize=11
     )
@@ -114,7 +146,7 @@ def compute_and_save_2d_dirac_cut(
     plt.legend(loc='best', framealpha=0.9)
     plt.tight_layout()
 
-    cut_img_name = f"floquet_2D_cut_N={N}_A0={A_0}_w={omega}_C_upper={c_upper_str}.png"
+    cut_img_name = f"floquet_2D_cut_N={N}_A0={A_0}_w={omega}_pol={pol}_C_upper={c_upper_str}.png"
     cut_img_path = os.path.join(output_folder, cut_img_name)
     plt.savefig(cut_img_path, dpi=300)
     plt.close()
@@ -125,26 +157,22 @@ def plot_winding_and_gaps_sweep(
     omega_min,
     omega_max,
     num_points,
-    pol,
+    pol=POLARIZATION,
     A_0=AMPLITUDE,
     t=HOPPING,
     max_order=1,
     N_k=70,
     save_plot=True,
-    output_filename="floquet_adaptive_sweep.png"
+    output_filename="floquet_adaptive_sweep.png",
+    hamiltonian_builder = build_floquet_hamiltonian
 ):
     """
-    Executes an adaptive-M frequency sweep.
-    Calculates M dynamically per frequency: M(omega) = max(2, ceil(6*t / omega))
-    to ensure full bandwidth coverage without artificial cutoff jumps.
+    Executes an adaptive-M frequency sweep and plots direct gaps and winding numbers.
     """
     omega_array = np.linspace(omega_min, omega_max, num_points)
 
-    gap_0_list = []
-    gap_half_list = []
-    gap_minus_list = []
-    w0_list = []
-    whalf_list = []
+    gap_0_list, gap_half_list, gap_minus_list = [], [], []
+    w0_list, whalf_list = [], []
 
     print("=" * 95)
     print(f" ADAPTIVE SWEEP: omega in [{omega_min:.3f}, {omega_max:.3f}] ({num_points} pts)")
@@ -154,27 +182,23 @@ def plot_winding_and_gaps_sweep(
     print("-" * 95)
 
     for idx, w in enumerate(omega_array):
-        # Adaptive M calculation based on the full physical bandwidth 6*t
         current_M = max(2, int(math.ceil(6.0 * t / w)))
-
         band_val_0 = 2 * current_M
         band_cond_0 = 2 * current_M + 1
 
-        # Evaluate physical band gaps across the Brillouin zone
         gap_lower, gap_0, _, _ = compute_band_gaps_spectrum(
             omega=w, M=current_M, target_band=band_val_0, A_0=A_0, t=t, pol=pol,
-            a=LATTICE_CONSTANT, max_order=max_order, N_k=N_k
+            a=LATTICE_CONSTANT, max_order=max_order, N_k=N_k, hamiltonian_builder = hamiltonian_builder
         )
         _, gap_upper, _, _ = compute_band_gaps_spectrum(
             omega=w, M=current_M, target_band=band_cond_0, A_0=A_0, t=t, pol=pol,
-            a=LATTICE_CONSTANT, max_order=max_order, N_k=N_k
+            a=LATTICE_CONSTANT, max_order=max_order, N_k=N_k, hamiltonian_builder = hamiltonian_builder
         )
 
         gap_0_list.append(gap_0)
         gap_half_list.append(gap_upper)
         gap_minus_list.append(gap_lower)
 
-        # Compute topological winding numbers
         w0 = compute_winding_number_for_band(
             target_band=band_val_0, omega=w, A_0=A_0, t=t, pol=pol,
             a=LATTICE_CONSTANT, M=current_M, max_order=max_order
@@ -199,17 +223,11 @@ def plot_winding_and_gaps_sweep(
     w0_arr = np.array([np.nan if v is None else float(v) for v in w0_list])
     wh_arr = np.array([np.nan if v is None else float(v) for v in whalf_list])
 
-    # Detect topological transitions based on winding steps
-    trans_w0_idx = np.where(np.diff(w0_arr) != 0)[0]
-    trans_wh_idx = np.where(np.diff(wh_arr) != 0)[0]
-
-    # Plot aligned double-panel figure
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(11.5, 8.5), sharex=True,
         gridspec_kw={'height_ratios': [1.1, 1.0]}
     )
 
-    # Top Panel: Direct Gaps
     ax1.plot(omega_array, gap_0_arr, color='navy', linestyle='-', linewidth=1.6, label=r'Central Gap $\Delta_0$ ($\varepsilon \approx 0$)')
     ax1.plot(omega_array, gap_half_arr, color='crimson', linestyle='--', linewidth=1.5, label=r'Upper Gap $\Delta_{+}$ ($\varepsilon \approx +\hbar\Omega/2$)')
     ax1.plot(omega_array, gap_minus_arr, color='forestgreen', linestyle=':', linewidth=1.3, alpha=0.8, label=r'Lower Gap $\Delta_{-}$ ($\varepsilon \approx -\hbar\Omega/2$)')
@@ -223,7 +241,6 @@ def plot_winding_and_gaps_sweep(
     ax1.grid(True, linestyle=':', alpha=0.55)
     ax1.legend(loc='upper right', framealpha=0.9)
 
-    # Bottom Panel: Winding Numbers
     ax2.step(omega_array, w0_arr, where='mid', color='navy', linewidth=1.8, label=r'$W(\varepsilon = 0)$')
     ax2.step(omega_array, wh_arr, where='mid', color='crimson', linewidth=1.8, label=r'$W(\varepsilon = \hbar\Omega/2)$')
     ax2.set_xlabel(r"Driving Frequency $\omega$", fontsize=12)
@@ -231,33 +248,16 @@ def plot_winding_and_gaps_sweep(
     ax2.grid(True, linestyle=':', alpha=0.55)
     ax2.legend(loc='best', framealpha=0.9)
 
-    # Vertical markers at gap closings
-    for i in trans_w0_idx:
-        w_crit = 0.5 * (omega_array[i] + omega_array[i+1])
-        ax1.axvline(w_crit, color='navy', linestyle=':', alpha=0.45)
-        ax2.axvline(w_crit, color='navy', linestyle=':', alpha=0.45)
-
-    for i in trans_wh_idx:
-        w_crit = 0.5 * (omega_array[i] + omega_array[i+1])
-        ax1.axvline(w_crit, color='crimson', linestyle=':', alpha=0.45)
-        ax2.axvline(w_crit, color='crimson', linestyle=':', alpha=0.45)
-
     plt.tight_layout()
     if save_plot:
         plt.savefig(output_filename, dpi=300)
         print(f"[\u2713] Saved adaptive sweep figure to: {output_filename}")
-
     plt.show()
 
 
-def plot_gap_and_chern_scan(scan_results, pol, save_plot=False, output_filename="floquet_gap_chern_scan.png"):
+def plot_gap_and_chern_scan(scan_results, pol=POLARIZATION, save_plot=False, output_filename="floquet_gap_chern_scan.png"):
     """
-    Plots the output of runners.run_scan_with_all_gaps: direct gaps (central,
-    below, above) in one panel and the valence-band Chern number in another.
-
-    This is a worked example of the compute/plot split mentioned at the top
-    of this file: run_scan_with_all_gaps() only computes and returns numbers,
-    this function only draws them.
+    Plots direct gaps alongside valence-band Chern number from scan_results.
     """
     omega_array = np.asarray(scan_results['omega'])
     chern_arr = np.array([np.nan if c is None else float(c) for c in scan_results['chern']])
@@ -268,7 +268,6 @@ def plot_gap_and_chern_scan(scan_results, pol, save_plot=False, output_filename=
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8), sharex=True, gridspec_kw={'height_ratios': [1.2, 1.0]})
 
-    # Subplot 1: All three direct gaps
     ax1.plot(omega_array, gap_central_arr, 'k.-', markersize=4, alpha=0.85, label=r'Central Gap $\Delta_0$ ($\varepsilon \approx 0$)')
     ax1.plot(omega_array, gap_below_arr, 'b.-', markersize=4, alpha=0.65, label=r'Gap Below $\Delta_{-}$ ($\varepsilon \approx -\omega/2$)')
     ax1.plot(omega_array, gap_above_arr, 'r--', markersize=3, alpha=0.55, label=r'Gap Above $\Delta_{+}$ ($\varepsilon \approx +\omega/2$)')
@@ -279,7 +278,6 @@ def plot_gap_and_chern_scan(scan_results, pol, save_plot=False, output_filename=
     ax1.grid(True, linestyle=':', alpha=0.6)
     ax1.legend(loc='upper right', framealpha=0.9)
 
-    # Subplot 2: Chern Number
     ax2.plot(omega_array, chern_arr, 'o-', color='navy', markersize=5, linewidth=1.4, label=r'Computed $C_{\text{val}}$')
     nan_omegas = omega_array[is_undefined]
     if len(nan_omegas) > 0:
@@ -299,7 +297,7 @@ def plot_gap_and_chern_scan(scan_results, pol, save_plot=False, output_filename=
 
 def plot_floquet_spectrum_with_invariants(
     omega,
-    pol,
+    pol=POLARIZATION,
     A_0=AMPLITUDE,
     t=HOPPING,
     max_order=1,
@@ -331,14 +329,21 @@ def plot_floquet_spectrum_with_invariants(
     )
     evals = np.linalg.eigvalsh(H_F)[:, 0, :]
 
-    # Compute Chern numbers and running Winding numbers
     chern_list = []
     w_running = 0
     winding_list = []
 
     for beta in range(total_bands):
         c_val, _, _, _, _ = compute_floquet_chern_adaptive(
-            N=M, band_idx=beta, omega=omega, A_0=A_0, t=t, pol=pol, a=a, max_grid=300
+            N=M,
+            band_idx=beta, omega=omega, 
+            A_0=A_0, 
+            t=t, 
+            pol=pol, 
+            a=a, 
+            max_grid=300, 
+            max_order=max_order, 
+            hamiltonian_builder = build_floquet_hamiltonian
         )
         c_num = c_val if c_val is not None else 0
         chern_list.append(c_num)
@@ -346,10 +351,8 @@ def plot_floquet_spectrum_with_invariants(
         winding_list.append(w_running)
         print(f"Band {beta:2d}: Chern C = {c_num:+2d} | Gap above: W = {w_running:+2d}")
 
-    # Plotting
     plt.figure(figsize=(10.5, 7.5))
 
-    # Static Dirac cones for reference
     a1, a2, _, _ = get_lattice_vectors(a=a)
     k_dot_a1 = KX * a1[0] + KY * a1[1]
     k_dot_a2 = KX * a2[0] + KY * a2[1]
@@ -358,24 +361,20 @@ def plot_floquet_spectrum_with_invariants(
     plt.plot(ky_vals, e_stat, 'k--', alpha=0.35, label="Static Graphene ($A_0=0$)")
     plt.plot(ky_vals, -e_stat, 'k--', alpha=0.35)
 
-    # Plot all Floquet bands
     colors = plt.cm.plasma(np.linspace(0.1, 0.9, total_bands))
     for b in range(total_bands):
         lbl = f"Band {b} (C={chern_list[b]:+d})" if (b == 2*M or b == 2*M+1) else None
         plt.plot(ky_vals, evals[:, b], color=colors[b], linewidth=1.8, label=lbl)
 
-        # Annotate Chern numbers on the right side
         e_end = evals[-1, b]
         plt.text(ky_max * 1.02, e_end, f"C={chern_list[b]:+d}", verticalalignment='center', fontsize=9, color=colors[b], fontweight='bold')
 
-        # Annotate winding number inside the gap above the band
         if b < total_bands - 1:
             e_gap = 0.5 * (evals[-1, b] + evals[-1, b + 1])
             is_central = (b == 2 * M)
             tag = f" W={winding_list[b]:+d}" + (" (eps=0)" if is_central else "")
             plt.text(ky_max * 1.15, e_gap, tag, verticalalignment='center', fontsize=9, color='black')
 
-    # Dirac point vertical lines
     ky_K_prime = -2.0 * np.pi / (3.0 * np.sqrt(3.0) * a)
     ky_K = +2.0 * np.pi / (3.0 * np.sqrt(3.0) * a)
     plt.axvline(ky_K_prime, color='green', linestyle=':', label=r"Dirac $K'$")
@@ -393,5 +392,4 @@ def plot_floquet_spectrum_with_invariants(
     if save_plot:
         plt.savefig(output_filename, dpi=300)
         print(f"[\u2713] Saved annotated spectrum to: {output_filename}")
-
     plt.show()

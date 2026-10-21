@@ -11,13 +11,25 @@ from .lattice import build_bz_grid
 from .hamiltonians import build_floquet_hamiltonian
 
 
-def compute_direct_gap(omega_val, N, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT, N_k=120):
+def compute_direct_gap(
+    omega_val,
+    N,
+    A_0=AMPLITUDE,
+    t=HOPPING,
+    pol=POLARIZATION,
+    a=LATTICE_CONSTANT,
+    max_order=1,
+    N_k=120,
+    hamiltonian_builder = build_floquet_hamiltonian
+):
     """
     Computes the minimum direct gap across the entire BZ between bands 2N and 2N+1.
     """
     KX, KY = build_bz_grid(N_k, a=a)
 
-    H_F = build_floquet_hamiltonian(KX, KY, N=N, omega=omega_val, A_0=A_0, t=t, pol=pol, a=a)
+    H_F = hamiltonian_builder(
+        KX, KY, N=N, omega=omega_val, A_0=A_0, t=t, pol=pol, a=a, max_order=max_order
+    )
     evals = np.linalg.eigvalsh(H_F)
 
     band_val = 2 * N
@@ -25,11 +37,20 @@ def compute_direct_gap(omega_val, N, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION,
     gaps = evals[..., band_cond] - evals[..., band_val]
 
     min_idx = np.unravel_index(np.argmin(gaps), gaps.shape)
-    return gaps[min_idx], (KX[min_idx], KY[min_idx])
+    return float(gaps[min_idx]), (float(KX[min_idx]), float(KY[min_idx]))
 
 
 def find_topological_critical_frequency(
-    omega_bracket, N, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT, tol=1e-5, N_k_base=100
+    omega_bracket,
+    N,
+    A_0=AMPLITUDE,
+    t=HOPPING,
+    pol=POLARIZATION,
+    a=LATTICE_CONSTANT,
+    max_order=1,
+    tol=1e-5,
+    N_k_base=100,
+    hamiltonian_builder = build_floquet_hamiltonian
 ):
     """
     Finds the exact transition frequency omega_c where the direct gap closes.
@@ -38,7 +59,9 @@ def find_topological_critical_frequency(
     print(f"[*] Starting search for gap closing in [{omega_a:.6f}, {omega_b:.6f}] (N={N})...")
 
     def objective(w, n_grid):
-        gap, _ = compute_direct_gap(w, N=N, A_0=A_0, t=t, pol=pol, a=a, N_k=n_grid)
+        gap, _ = compute_direct_gap(
+            w, N=N, A_0=A_0, t=t, pol=pol, a=a, max_order=max_order, N_k=n_grid, hamiltonian_builder = hamiltonian_builder
+        )
         return gap
 
     res = minimize_scalar(
@@ -49,9 +72,11 @@ def find_topological_critical_frequency(
         options={"xatol": tol},
     )
 
-    omega_candidate = res.x
+    omega_candidate = float(res.x)
     N_k_fine = int(N_k_base * 1.8)
-    final_gap, k_closing = compute_direct_gap(omega_candidate, N=N, A_0=A_0, t=t, pol=pol, a=a, N_k=N_k_fine)
+    final_gap, k_closing = compute_direct_gap(
+        omega_candidate, N=N, A_0=A_0, t=t, pol=pol, a=a, max_order=max_order, N_k=N_k_fine
+    )
 
     print("[\u2713] Transition identified:")
     print(f"    Critical frequency omega_c : {omega_candidate:.6f}")
@@ -71,6 +96,7 @@ def compute_band_gaps_spectrum(
     a=LATTICE_CONSTANT,
     max_order=1,
     N_k=100,
+    hamiltonian_builder = build_floquet_hamiltonian
 ):
     """
     Computes direct band gaps across the entire BZ immediately below and above 'target_band'.
@@ -84,7 +110,9 @@ def compute_band_gaps_spectrum(
     """
     KX, KY = build_bz_grid(N_k, a=a)
 
-    H_F = build_floquet_hamiltonian(KX, KY, N=M, omega=omega, A_0=A_0, t=t, pol=pol, a=a, max_order=max_order)
+    H_F = hamiltonian_builder(
+        KX, KY, N=M, omega=omega, A_0=A_0, t=t, pol=pol, a=a, max_order=max_order
+    )
     evals = np.linalg.eigvalsh(H_F)
     total_bands = evals.shape[-1]
 
@@ -107,3 +135,48 @@ def compute_band_gaps_spectrum(
         gap_above, k_min_above = None, None
 
     return gap_below, gap_above, k_min_below, k_min_above
+
+
+def compute_band_isolation_gap_from_evals(evals, band_idx):
+    """
+    Extracts the minimum direct gap that isolates 'band_idx' from its neighbors
+    using pre-diagonalized eigenvalues across the Brillouin zone.
+
+    Parameters
+    ----------
+    evals : np.ndarray
+        Eigenvalue tensor of shape (..., total_bands), sorted ascendingly.
+    band_idx : int
+        Index of the target band.
+
+    Returns
+    -------
+    isolation_gap : float
+        min(gap_below, gap_above).
+    gap_below : float or None
+        Minimum direct gap to band_idx - 1 across all k-points.
+    gap_above : float or None
+        Minimum direct gap to band_idx + 1 across all k-points.
+    """
+    total_bands = evals.shape[-1]
+    if band_idx < 0 or band_idx >= total_bands:
+        raise IndexError(f"band_idx {band_idx} is out of bounds for total_bands={total_bands}")
+
+    gap_below = None
+    if band_idx > 0:
+        gap_below = float(np.min(evals[..., band_idx] - evals[..., band_idx - 1]))
+
+    gap_above = None
+    if band_idx + 1 < total_bands:
+        gap_above = float(np.min(evals[..., band_idx + 1] - evals[..., band_idx]))
+
+    if gap_below is not None and gap_above is not None:
+        isolation_gap = min(gap_below, gap_above)
+    elif gap_below is not None:
+        isolation_gap = gap_below
+    elif gap_above is not None:
+        isolation_gap = gap_above
+    else:
+        isolation_gap = 0.0
+
+    return isolation_gap, gap_below, gap_above

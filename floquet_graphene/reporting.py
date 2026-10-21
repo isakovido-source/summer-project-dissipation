@@ -3,9 +3,9 @@ Human-readable text reports summarizing computed invariants.
 """
 
 from .topology import compute_floquet_chern_adaptive
+from .hamiltonians import build_floquet_hamiltonian
 
-
-def print_spectral_comparison_table(M, omega, A_0, t, pol, a, max_grid=360):
+def print_spectral_comparison_table(M, omega, A_0, t, pol, a, max_grid=360, hamiltonian_builder = build_floquet_hamiltonian):
     """
     Computes and displays the complete topological spectrum in a clear structured table.
     """
@@ -28,7 +28,15 @@ def print_spectral_comparison_table(M, omega, A_0, t, pol, a, max_grid=360):
         label = fig3_labels[beta] if beta < len(fig3_labels) else f"C_{beta}"
 
         c_val, _, _, _, grid_used = compute_floquet_chern_adaptive(
-            N=M, band_idx=beta, omega=omega, A_0=A_0, t=t, pol=pol, a=a, max_grid=max_grid
+            N=M, 
+            band_idx=beta, 
+            omega=omega, 
+            A_0=A_0, 
+            t=t, 
+            pol=pol, 
+            a=a, 
+            max_grid=max_grid,
+            hamiltonian_builder = hamiltonian_builder
         )
 
         c_num = c_val if c_val is not None else 0

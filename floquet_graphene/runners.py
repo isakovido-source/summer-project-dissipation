@@ -20,9 +20,16 @@ from .gaps import compute_band_gaps_spectrum
 from .plotting import compute_and_save_interactive_plotly, compute_and_save_2d_dirac_cut
 
 
-def run_calculate_chern(target_omega, N_replicas=None, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT):
+def run_calculate_chern(
+    target_omega, N_replicas=None, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT, max_grid=360
+):
     """
     Calculates and prints the Chern numbers for central valence and conduction bands.
+
+    max_grid: upper bound on the Brillouin-zone grid size (N x N) the adaptive
+    Chern solver (topology.compute_floquet_chern_adaptive) is allowed to use
+    while searching for a stable result. Raise this if you see a "[Warning]
+    reached max_grid WITHOUT a confirmed stable result" message printed below.
     """
     # Total static bandwidth for graphene tight-binding model
     W = 6.0 * t
@@ -40,12 +47,12 @@ def run_calculate_chern(target_omega, N_replicas=None, A_0=AMPLITUDE, t=HOPPING,
 
     # 1. Valence band
     c_val, _, gap_val, flux_val, grid_val = compute_floquet_chern_adaptive(
-        N=N_replicas, band_idx=band_val, omega=target_omega, A_0=A_0, t=t, pol=pol, a=a
+        N=N_replicas, band_idx=band_val, omega=target_omega, A_0=A_0, t=t, pol=pol, a=a, max_grid=max_grid
     )
 
     # 2. Conduction band
     c_cond, _, gap_cond, flux_cond, grid_cond = compute_floquet_chern_adaptive(
-        N=N_replicas, band_idx=band_cond, omega=target_omega, A_0=A_0, t=t, pol=pol, a=a
+        N=N_replicas, band_idx=band_cond, omega=target_omega, A_0=A_0, t=t, pol=pol, a=a, max_grid=max_grid
     )
 
     print("\n" + "-" * 40)
@@ -60,10 +67,19 @@ def run_calculate_chern(target_omega, N_replicas=None, A_0=AMPLITUDE, t=HOPPING,
     return c_val, c_cond
 
 
-def run_generate_graphs(omega_val, results_dir, N_replicas=None, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT):
+def run_generate_graphs(
+    omega_val, results_dir, N_replicas=None, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT,
+    grid_size=60,
+):
     """
     Generates the interactive 3D band plot and the 2D Dirac cut for one (or every)
     Floquet replica order N, saving them under results_dir.
+
+    grid_size: resolution (grid_size x grid_size) of the Brillouin-zone grid
+    used for the 3D band plot only (plotting.compute_and_save_interactive_plotly).
+    This is purely a rendering resolution -- unrelated to the Chern solver's
+    own adaptive grid, which is controlled separately (see
+    run_calculate_chern's docstring).
 
     Note: this used to compute its own output path from __file__; now the
     caller (a script) decides where results go, which keeps this function
@@ -91,10 +107,16 @@ def run_generate_graphs(omega_val, results_dir, N_replicas=None, A_0=AMPLITUDE, 
         compute_and_save_2d_dirac_cut(N, omega_val, full_output_path, c_lower, c_upper, A_0=A_0, t=t, pol=pol, a=a)
 
 
-def run_omega_sweep(omega_min, omega_max, num_points=50, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION):
+def run_omega_sweep(omega_min, omega_max, num_points=50, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, max_grid=360):
     """
     Sweeps drive frequency across a specified interval to detect topological transitions.
     Tracks Chern numbers, direct gaps, and required grid resolutions.
+
+    max_grid: upper bound on the Chern solver's Brillouin-zone grid (see
+    run_calculate_chern for details). At small omega the required N_replicas
+    grows and the grid needed to get a stable Chern number grows with it --
+    if you see "[Warning] reached max_grid" messages at the low end of your
+    omega range, raise this (at the cost of a slower sweep).
     """
     omega_vals_arr = np.linspace(omega_min, omega_max, num_points)
     results = []
@@ -112,12 +134,12 @@ def run_omega_sweep(omega_min, omega_max, num_points=50, A_0=AMPLITUDE, t=HOPPIN
 
         # 1. Valence band Chern calculation
         c_val, _, gap_val, flux_val, grid_val = compute_floquet_chern_adaptive(
-            N=N_replicas, band_idx=band_val, omega=w, A_0=A_0, t=t, pol=pol
+            N=N_replicas, band_idx=band_val, omega=w, A_0=A_0, t=t, pol=pol, max_grid=max_grid
         )
 
         # 2. Conduction band Chern calculation
         c_cond, _, gap_cond, flux_cond, grid_cond = compute_floquet_chern_adaptive(
-            N=N_replicas, band_idx=band_cond, omega=w, A_0=A_0, t=t, pol=pol
+            N=N_replicas, band_idx=band_cond, omega=w, A_0=A_0, t=t, pol=pol, max_grid=max_grid
         )
 
         c_val_str = f"{c_val:+d}" if c_val is not None else "Gapless"
@@ -137,9 +159,22 @@ def run_omega_sweep(omega_min, omega_max, num_points=50, A_0=AMPLITUDE, t=HOPPIN
     return results
 
 
-def run_fast_chern_sweep(omega_array, max_grid_cap=220, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT):
+def run_fast_chern_sweep(
+    omega_array, max_grid=220, N_k=70, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT
+):
     """
     Sweeps through omega values with bounded grid refinement to prevent freezing near gap closings.
+
+    This is a DELIBERATELY FAST/APPROXIMATE sweep: max_grid is capped low so
+    it finishes quickly, at the cost of reliability for small omega (see
+    run_calculate_chern's docstring, and ask Claude about the stability-check
+    fix in topology.compute_floquet_chern_adaptive for why a low grid cap can
+    silently return the wrong Chern number). Use run_omega_sweep with a
+    larger max_grid if you need a trustworthy answer in that regime.
+
+    N_k: number of k-points per axis used only for the quick central-gap
+    estimate printed in the table (via gaps.compute_band_gaps_spectrum) --
+    independent of the Chern solver's own (separately adaptive) grid.
     """
     W = 6.0 * t
 
@@ -153,19 +188,19 @@ def run_fast_chern_sweep(omega_array, max_grid_cap=220, A_0=AMPLITUDE, t=HOPPING
         b_cond = 2 * N_rep + 1
 
         _, direct_gap, _, _ = compute_band_gaps_spectrum(
-            omega=w, M=N_rep, target_band=b_val, A_0=A_0, t=t, pol=pol, a=a, N_k=70
+            omega=w, M=N_rep, target_band=b_val, A_0=A_0, t=t, pol=pol, a=a, N_k=N_k
         )
 
         # Compute valence band Chern with capped grid refinement
         c_v, _, _, _, grid_v = compute_floquet_chern_adaptive(
             N=N_rep, band_idx=b_val, omega=w, A_0=A_0, t=t, pol=pol, a=a,
-            flux_threshold=0.85 * np.pi, max_grid=max_grid_cap
+            flux_threshold=0.85 * np.pi, max_grid=max_grid
         )
 
         # Compute conduction band Chern with capped grid refinement
         c_c, _, _, _, grid_c = compute_floquet_chern_adaptive(
             N=N_rep, band_idx=b_cond, omega=w, A_0=A_0, t=t, pol=pol, a=a,
-            flux_threshold=0.85 * np.pi, max_grid=max_grid_cap
+            flux_threshold=0.85 * np.pi, max_grid=max_grid
         )
 
         c_v_str = f"{c_v:+d}" if c_v is not None else "Gapless"
@@ -175,10 +210,19 @@ def run_fast_chern_sweep(omega_array, max_grid_cap=220, A_0=AMPLITUDE, t=HOPPING
         print(f"{w:10.5f} | {N_rep:3d} | {c_v_str:>8} | {c_c_str:>8} | {direct_gap:13.4e} | {grid_max:4d}x{grid_max:<4d}")
 
 
-def run_scan_with_all_gaps(omega_min, omega_max, num_points, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT):
+def run_scan_with_all_gaps(
+    omega_min, omega_max, num_points, A_0=AMPLITUDE, t=HOPPING, pol=POLARIZATION, a=LATTICE_CONSTANT,
+    N_k=100, max_grid=280,
+):
     """
     Executes frequency sweep and returns direct gaps (central, below, above)
     alongside the Chern number, for the caller to plot or inspect.
+
+    N_k: BZ grid density (N_k x N_k) used for the direct-gap calculations
+    (gaps.compute_band_gaps_spectrum). Higher = more accurate gap location,
+    slower.
+    max_grid: upper bound on the Chern solver's own adaptive grid (see
+    run_calculate_chern's docstring). If omega_min is small, raise this.
     """
     W = 6.0 * t
     omega_array = np.linspace(omega_min, omega_max, num_points)
@@ -196,17 +240,17 @@ def run_scan_with_all_gaps(omega_min, omega_max, num_points, A_0=AMPLITUDE, t=HO
 
         # Compute topological invariant for the valence band
         c_num, _, _, _, grid_pts = compute_floquet_chern_adaptive(
-            N=N_rep, band_idx=band_val, omega=w, A_0=A_0, t=t, pol=pol, a=a, max_grid=280
+            N=N_rep, band_idx=band_val, omega=w, A_0=A_0, t=t, pol=pol, a=a, max_grid=max_grid
         )
         chern_results.append(c_num)
 
         # Compute gaps below and above valence band
         g_below, g_central, _, _ = compute_band_gaps_spectrum(
-            omega=w, M=N_rep, target_band=band_val, A_0=A_0, t=t, pol=pol, a=a, N_k=100
+            omega=w, M=N_rep, target_band=band_val, A_0=A_0, t=t, pol=pol, a=a, N_k=N_k
         )
         # Compute gap above conduction band
         _, g_above, _, _ = compute_band_gaps_spectrum(
-            omega=w, M=N_rep, target_band=band_val + 1, A_0=A_0, t=t, pol=pol, a=a, N_k=100
+            omega=w, M=N_rep, target_band=band_val + 1, A_0=A_0, t=t, pol=pol, a=a, N_k=N_k
         )
 
         gap_below_results.append(g_below)
